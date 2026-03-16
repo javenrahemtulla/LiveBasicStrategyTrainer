@@ -20,19 +20,19 @@ import { Card, Rank, Suit, Detection } from './types'
 
 const TEMPLATE_W = 24
 const TEMPLATE_H = 36
-const CORNER_FRAC_X = 0.18 // left 18% of card width for corner
-const CORNER_FRAC_Y = 0.28 // top 28% of card height for corner
+const CORNER_FRAC_X = 0.22 // left 22% of card width for corner
+const CORNER_FRAC_Y = 0.32 // top 32% of card height for corner
 
 // Card aspect ratio: width/height ≈ 0.714 (2.5 x 3.5 inches)
-const CARD_ASPECT_MIN = 0.45
-const CARD_ASPECT_MAX = 0.90
+const CARD_ASPECT_MIN = 0.35
+const CARD_ASPECT_MAX = 0.95
 
 // Minimum/maximum card area as fraction of total image area
-const MIN_AREA_FRAC = 0.003
-const MAX_AREA_FRAC = 0.12
+const MIN_AREA_FRAC = 0.001
+const MAX_AREA_FRAC = 0.25
 
 // Minimum confidence to report a detection
-const MIN_MATCH_CONFIDENCE = 0.35
+const MIN_MATCH_CONFIDENCE = 0.25
 
 const ALL_RANKS: Rank[] = ['A', '2', '3', '4', '5', '6', '7', '8', '9', 'T', 'J', 'Q', 'K']
 const RANK_DISPLAY: Record<Rank, string> = {
@@ -54,7 +54,7 @@ let _templates: RankTemplate[] | null = null
 
 /**
  * Generate binary templates for each rank by rendering text on a canvas.
- * Called once at initialization.
+ * We generate multiple font variants to improve matching against real cards.
  */
 export function getRankTemplates(): RankTemplate[] {
   if (_templates) return _templates
@@ -65,34 +65,48 @@ export function getRankTemplates(): RankTemplate[] {
   canvas.height = TEMPLATE_H
   const ctx = canvas.getContext('2d')!
 
+  // Generate templates with multiple font styles for better matching
+  const fonts = [
+    { family: '"Times New Roman", Georgia, serif', weight: 'bold' },
+    { family: 'Arial, Helvetica, sans-serif', weight: 'bold' },
+    { family: '"Courier New", monospace', weight: 'bold' },
+  ]
+
   for (const rank of ALL_RANKS) {
     const display = RANK_DISPLAY[rank]
+    let bestTemplate: Uint8Array | null = null
 
-    ctx.fillStyle = 'white'
-    ctx.fillRect(0, 0, TEMPLATE_W, TEMPLATE_H)
+    // Use the first font as the primary template (most card-like)
+    for (const font of fonts) {
+      ctx.fillStyle = 'white'
+      ctx.fillRect(0, 0, TEMPLATE_W, TEMPLATE_H)
 
-    ctx.fillStyle = 'black'
-    ctx.textAlign = 'center'
-    ctx.textBaseline = 'middle'
+      ctx.fillStyle = 'black'
+      ctx.textAlign = 'center'
+      ctx.textBaseline = 'middle'
 
-    // Use a bold serif font — close to what's on most cards
-    const fontSize = display.length > 1 ? 22 : 28
-    ctx.font = `bold ${fontSize}px "Times New Roman", Georgia, serif`
-    ctx.fillText(display, TEMPLATE_W / 2, TEMPLATE_H / 2)
+      const fontSize = display.length > 1 ? 20 : 26
+      ctx.font = `${font.weight} ${fontSize}px ${font.family}`
+      ctx.fillText(display, TEMPLATE_W / 2, TEMPLATE_H / 2)
 
-    const imgData = ctx.getImageData(0, 0, TEMPLATE_W, TEMPLATE_H)
-    const binary = new Uint8Array(TEMPLATE_W * TEMPLATE_H)
+      const imgData = ctx.getImageData(0, 0, TEMPLATE_W, TEMPLATE_H)
+      const binary = new Uint8Array(TEMPLATE_W * TEMPLATE_H)
 
-    for (let i = 0; i < binary.length; i++) {
-      // Grayscale from RGB
-      const r = imgData.data[i * 4]
-      const g = imgData.data[i * 4 + 1]
-      const b = imgData.data[i * 4 + 2]
-      const gray = 0.299 * r + 0.587 * g + 0.114 * b
-      binary[i] = gray < 128 ? 0 : 255
+      for (let i = 0; i < binary.length; i++) {
+        const r = imgData.data[i * 4]
+        const g = imgData.data[i * 4 + 1]
+        const b = imgData.data[i * 4 + 2]
+        const gray = 0.299 * r + 0.587 * g + 0.114 * b
+        binary[i] = gray < 128 ? 0 : 255
+      }
+
+      if (!bestTemplate) {
+        bestTemplate = binary
+      }
+
+      // Add each font variant as a separate template
+      _templates.push({ rank, pixels: binary })
     }
-
-    _templates.push({ rank, pixels: binary })
   }
 
   return _templates
@@ -154,6 +168,45 @@ export function otsuThreshold(gray: Uint8Array, w: number, h: number): { binary:
   }
 
   return { binary, threshold: bestT }
+}
+
+/**
+ * Adaptive (local mean) thresholding — handles uneven lighting better than Otsu.
+ * Uses a block-based approach for speed.
+ */
+export function adaptiveThreshold(gray: Uint8Array, w: number, h: number, blockSize = 31, C = 8): Uint8Array {
+  const binary = new Uint8Array(w * h)
+  const half = Math.floor(blockSize / 2)
+
+  // Build integral image for fast local mean computation
+  const integral = new Float64Array((w + 1) * (h + 1))
+  for (let y = 0; y < h; y++) {
+    let rowSum = 0
+    for (let x = 0; x < w; x++) {
+      rowSum += gray[y * w + x]
+      integral[(y + 1) * (w + 1) + (x + 1)] = rowSum + integral[y * (w + 1) + (x + 1)]
+    }
+  }
+
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const x1 = Math.max(0, x - half)
+      const y1 = Math.max(0, y - half)
+      const x2 = Math.min(w - 1, x + half)
+      const y2 = Math.min(h - 1, y + half)
+      const count = (x2 - x1 + 1) * (y2 - y1 + 1)
+
+      const sum = integral[(y2 + 1) * (w + 1) + (x2 + 1)]
+        - integral[y1 * (w + 1) + (x2 + 1)]
+        - integral[(y2 + 1) * (w + 1) + x1]
+        + integral[y1 * (w + 1) + x1]
+
+      const mean = sum / count
+      binary[y * w + x] = gray[y * w + x] > mean - C ? 255 : 0
+    }
+  }
+
+  return binary
 }
 
 /**
@@ -338,7 +391,7 @@ function binarize(gray: Uint8Array): Uint8Array {
   let sum = 0
   for (let i = 0; i < gray.length; i++) sum += gray[i]
   const mean = sum / gray.length
-  const threshold = mean * 0.8 // slightly below mean to capture text
+  const threshold = mean * 0.85 // slightly below mean to capture text
 
   const out = new Uint8Array(gray.length)
   for (let i = 0; i < gray.length; i++) {
@@ -353,24 +406,12 @@ function binarize(gray: Uint8Array): Uint8Array {
 
 /**
  * Detect suit by analyzing the color of the card corner.
- * - Red pips → hearts or diamonds
- * - Black pips → spades or clubs
- *
- * For distinguishing within red/black pairs, we check vertical symmetry:
- * - Hearts: wider at top, pointy at bottom (top-heavy)
- * - Diamonds: symmetric diamond shape
- * - Spades: wider at top with a stem at bottom
- * - Clubs: three lobes + stem
- *
- * Since precise suit detection without ML is unreliable, we default to
- * suit based on color (red→hearts, black→spades) for strategy purposes.
- * Suit doesn't affect basic strategy, so this is fine.
+ * Suit doesn't affect basic strategy, so just use color (red→hearts, black→spades).
  */
 function detectSuitColor(
   rgba: Uint8ClampedArray, imgW: number,
   box: BBox,
 ): Suit {
-  // Sample the suit symbol area — below the rank character, still in the corner
   const cardW = box.maxX - box.minX
   const cardH = box.maxY - box.minY
   const suitX = box.minX + Math.round(cardW * 0.02)
@@ -380,7 +421,6 @@ function detectSuitColor(
 
   let redCount = 0
   let blackCount = 0
-  let totalSampled = 0
 
   for (let y = suitY; y < suitY + suitH && y < box.maxY; y++) {
     for (let x = suitX; x < suitX + suitW && x < box.maxX; x++) {
@@ -389,13 +429,9 @@ function detectSuitColor(
       const g = rgba[off + 1]
       const b = rgba[off + 2]
 
-      // Skip light/white pixels (card background)
       const brightness = (r + g + b) / 3
       if (brightness > 180) continue
 
-      totalSampled++
-
-      // Check if pixel is red-ish
       if (r > 120 && r > g * 1.5 && r > b * 1.5) {
         redCount++
       } else if (brightness < 100) {
@@ -404,38 +440,34 @@ function detectSuitColor(
     }
   }
 
-  // Suit doesn't affect basic strategy, so just use color
-  if (redCount > blackCount) {
-    return 'h' // hearts (red)
-  } else {
-    return 's' // spades (black)
-  }
+  return redCount > blackCount ? 'h' : 's'
 }
 
 // ============================================================
 // Main detection pipeline
 // ============================================================
 
-export function detectCardsInFrame(imageData: ImageData): Detection[] {
-  const w = imageData.width
-  const h = imageData.height
-  const totalArea = w * h
-  const rgba = imageData.data
+/**
+ * Run detection with a given binary image. Returns card detections.
+ */
+function detectFromBinary(
+  binary: Uint8Array, gray: Uint8Array, rgba: Uint8ClampedArray,
+  w: number, h: number, totalArea: number, templates: RankTemplate[],
+  skipMorph = false,
+): Detection[] {
+  // Morphological cleanup
+  let cleaned: Uint8Array
+  if (skipMorph) {
+    cleaned = binary
+  } else {
+    const eroded = erode(binary, w, h)
+    cleaned = dilate(eroded, w, h)
+  }
 
-  // Step 1: Grayscale
-  const gray = toGrayscale(rgba, w * h)
-
-  // Step 2: Otsu threshold
-  const { binary } = otsuThreshold(gray, w, h)
-
-  // Step 3: Morphological cleanup — erode to remove noise, then dilate to restore
-  const eroded = erode(binary, w, h)
-  const cleaned = dilate(eroded, w, h)
-
-  // Step 4: Connected components
+  // Connected components
   const { boxes } = labelComponents(cleaned, w, h)
 
-  // Step 5: Filter for card-shaped rectangles
+  // Filter for card-shaped rectangles
   const cardBoxes = boxes.filter(box => {
     const bw = box.maxX - box.minX
     const bh = box.maxY - box.minY
@@ -450,38 +482,58 @@ export function detectCardsInFrame(imageData: ImageData): Detection[] {
 
     // Check fill ratio — a card-shaped blob should fill most of its bounding box
     const fillRatio = box.area / area
-    if (fillRatio < 0.5) return false
+    if (fillRatio < 0.4) return false
 
     return true
   })
 
-  // Step 6: For each card, identify rank and suit
-  const templates = getRankTemplates()
+  // For each card, identify rank and suit
   const detections: Detection[] = []
 
   for (const box of cardBoxes) {
     const cardW = box.maxX - box.minX
     const cardH = box.maxY - box.minY
 
-    // Extract corner region (top-left)
-    const cornerX = box.minX
-    const cornerY = box.minY
-    const cornerW = Math.max(8, Math.round(cardW * CORNER_FRAC_X))
-    const cornerH = Math.max(12, Math.round(cardH * CORNER_FRAC_Y))
+    // Try both top-left and top-right corners (card may be upside down)
+    const corners = [
+      // Top-left corner
+      { x: box.minX, y: box.minY },
+      // Top-right corner (mirrored)
+      { x: box.maxX - Math.max(8, Math.round(cardW * CORNER_FRAC_X)), y: box.minY },
+    ]
 
-    // Extract and resize corner to template size
-    const cornerGray = extractAndResize(gray, w, cornerX, cornerY, cornerW, cornerH, TEMPLATE_W, TEMPLATE_H)
-    const cornerBin = binarize(cornerGray)
-
-    // Match against all rank templates
     let bestRank: Rank = 'A'
     let bestScore = -Infinity
 
-    for (const tmpl of templates) {
-      const score = ncc(cornerBin, tmpl.pixels)
-      if (score > bestScore) {
-        bestScore = score
-        bestRank = tmpl.rank
+    for (const corner of corners) {
+      const cornerW = Math.max(8, Math.round(cardW * CORNER_FRAC_X))
+      const cornerH = Math.max(12, Math.round(cardH * CORNER_FRAC_Y))
+
+      // Clamp corner within image bounds
+      const cx = Math.max(0, Math.min(corner.x, w - cornerW))
+      const cy = Math.max(0, Math.min(corner.y, h - cornerH))
+
+      const cornerGray = extractAndResize(gray, w, cx, cy, cornerW, cornerH, TEMPLATE_W, TEMPLATE_H)
+      const cornerBin = binarize(cornerGray)
+
+      // Also try inverted (dark card with light text)
+      const cornerBinInv = new Uint8Array(cornerBin.length)
+      for (let i = 0; i < cornerBin.length; i++) {
+        cornerBinInv[i] = cornerBin[i] === 0 ? 255 : 0
+      }
+
+      for (const tmpl of templates) {
+        const score = ncc(cornerBin, tmpl.pixels)
+        if (score > bestScore) {
+          bestScore = score
+          bestRank = tmpl.rank
+        }
+        // Also try inverted
+        const scoreInv = ncc(cornerBinInv, tmpl.pixels)
+        if (scoreInv > bestScore) {
+          bestScore = scoreInv
+          bestRank = tmpl.rank
+        }
       }
     }
 
@@ -500,9 +552,55 @@ export function detectCardsInFrame(imageData: ImageData): Detection[] {
     detections.push({
       card: { rank: bestRank, suit },
       bbox: [nx, ny, nw, nh],
-      confidence: Math.max(0, Math.min(1, (bestScore + 1) / 2)), // normalize NCC [-1,1] to [0,1]
+      confidence: Math.max(0, Math.min(1, (bestScore + 1) / 2)),
     })
   }
 
   return detections
+}
+
+export function detectCardsInFrame(imageData: ImageData): Detection[] {
+  const w = imageData.width
+  const h = imageData.height
+  const totalArea = w * h
+  const rgba = imageData.data
+
+  // Step 1: Grayscale
+  const gray = toGrayscale(rgba, w * h)
+
+  const templates = getRankTemplates()
+
+  // Strategy: try multiple thresholding approaches and pick the one that finds cards
+
+  // Attempt 1: Otsu threshold + morphology
+  const { binary: otsuBin } = otsuThreshold(gray, w, h)
+  const otsuResults = detectFromBinary(otsuBin, gray, rgba, w, h, totalArea, templates)
+
+  if (otsuResults.length > 0) {
+    return otsuResults
+  }
+
+  // Attempt 2: Adaptive threshold (handles uneven lighting)
+  const adaptiveBin = adaptiveThreshold(gray, w, h, 31, 8)
+  const adaptiveResults = detectFromBinary(adaptiveBin, gray, rgba, w, h, totalArea, templates)
+
+  if (adaptiveResults.length > 0) {
+    return adaptiveResults
+  }
+
+  // Attempt 3: Otsu without morphological cleanup (small cards may get erased)
+  const noMorphResults = detectFromBinary(otsuBin, gray, rgba, w, h, totalArea, templates, true)
+
+  if (noMorphResults.length > 0) {
+    return noMorphResults
+  }
+
+  // Attempt 4: Fixed high threshold (cards are typically bright white)
+  const highBin = new Uint8Array(totalArea)
+  for (let i = 0; i < totalArea; i++) {
+    highBin[i] = gray[i] > 180 ? 255 : 0
+  }
+  const highResults = detectFromBinary(highBin, gray, rgba, w, h, totalArea, templates, true)
+
+  return highResults
 }

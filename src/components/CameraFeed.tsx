@@ -10,9 +10,12 @@ import { Detection } from '@/lib/types'
 export function CameraFeed() {
   const videoRef = useRef<HTMLVideoElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const debugCanvasRef = useRef<HTMLCanvasElement>(null)
   const [error, setError] = useState<string | null>(null)
   const [isReady, setIsReady] = useState(false)
   const [statusText, setStatusText] = useState('Starting camera...')
+  const [debugInfo, setDebugInfo] = useState('')
+  const [showDebug, setShowDebug] = useState(false)
   const stateMachineRef = useRef<GameStateMachine | null>(null)
 
   const {
@@ -119,8 +122,8 @@ export function CameraFeed() {
     const ctx = canvas.getContext('2d')
     if (!ctx) return null
 
-    // Downscale for faster processing
-    const scale = Math.min(1, 480 / video.videoWidth)
+    // Downscale for faster processing — 640px gives better corner detail
+    const scale = Math.min(1, 640 / video.videoWidth)
     canvas.width = Math.round(video.videoWidth * scale)
     canvas.height = Math.round(video.videoHeight * scale)
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
@@ -143,11 +146,38 @@ export function CameraFeed() {
         try {
           const detections = detectCards(frame)
           setDetections(detections)
-          setStatusText(
-            detections.length > 0
-              ? `${detections.length} card${detections.length !== 1 ? 's' : ''} detected`
-              : 'No cards detected'
-          )
+
+          const status = detections.length > 0
+            ? `${detections.length} card${detections.length !== 1 ? 's' : ''} detected`
+            : 'No cards detected'
+          setStatusText(status)
+
+          // Update debug info
+          setDebugInfo(`${frame.width}x${frame.height} | ${detections.length} cards | ${detections.map(d => `${d.card.rank}${d.card.suit}(${Math.round(d.confidence * 100)}%)`).join(' ')}`)
+
+          // Show processed frame in debug canvas
+          if (showDebug && debugCanvasRef.current) {
+            const dCtx = debugCanvasRef.current.getContext('2d')
+            if (dCtx) {
+              debugCanvasRef.current.width = frame.width
+              debugCanvasRef.current.height = frame.height
+              dCtx.putImageData(frame, 0, 0)
+
+              // Draw detection boxes on debug canvas
+              dCtx.strokeStyle = '#00ff00'
+              dCtx.lineWidth = 2
+              dCtx.font = '12px monospace'
+              dCtx.fillStyle = '#00ff00'
+              for (const det of detections) {
+                const x = det.bbox[0] * frame.width
+                const y = det.bbox[1] * frame.height
+                const w = det.bbox[2] * frame.width
+                const h = det.bbox[3] * frame.height
+                dCtx.strokeRect(x, y, w, h)
+                dCtx.fillText(`${det.card.rank}${det.card.suit}`, x, y - 4)
+              }
+            }
+          }
 
           // Feed through spatial mapper → game state machine
           if (stateMachineRef.current) {
@@ -165,7 +195,7 @@ export function CameraFeed() {
 
     tick()
     return () => { running = false }
-  }, [isReady, captureFrame, setDetections, calibration])
+  }, [isReady, captureFrame, setDetections, calibration, showDebug])
 
   const detections = useGameStore(s => s.detections)
 
@@ -188,11 +218,30 @@ export function CameraFeed() {
       />
       <canvas ref={canvasRef} className="hidden" />
 
-      {/* Detection status */}
+      {/* Detection status + debug toggle */}
       {isReady && (
-        <div className="absolute top-12 right-2 z-20">
+        <div className="absolute top-12 right-2 z-20 flex flex-col items-end gap-1">
           <div className="px-2 py-1 rounded text-xs backdrop-blur-sm bg-black/60 text-gray-300">
             {statusText}
+          </div>
+          <button
+            onClick={() => setShowDebug(d => !d)}
+            className="px-2 py-1 rounded text-xs backdrop-blur-sm bg-black/60 text-yellow-400"
+          >
+            {showDebug ? 'Hide Debug' : 'Debug'}
+          </button>
+        </div>
+      )}
+
+      {/* Debug overlay — shows processed frame */}
+      {showDebug && (
+        <div className="absolute top-24 right-2 z-30 bg-black/80 rounded-lg p-2 max-w-[50vw]">
+          <canvas
+            ref={debugCanvasRef}
+            className="w-full rounded"
+          />
+          <div className="text-[10px] text-yellow-400 mt-1 break-all">
+            {debugInfo}
           </div>
         </div>
       )}

@@ -8,7 +8,7 @@
 import { Detection } from './types'
 import { detectCardsInFrame } from './cardVision'
 
-export const DETECT_FPS = 3 // Detection rate in frames per second
+export const DETECT_FPS = 5 // Detection rate in frames per second
 
 /**
  * Detect cards in a camera frame using pure computer vision.
