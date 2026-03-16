@@ -1,11 +1,11 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { CameraFeed } from '@/components/CameraFeed'
 import { GameOverlay } from '@/components/GameOverlay'
 import { ManualInput } from '@/components/ManualInput'
 import { CalibrationView } from '@/components/CalibrationView'
-import { useGameStore } from '@/lib/sessionStore'
+import { useGameStore, flushPendingSessions } from '@/lib/sessionStore'
 import Link from 'next/link'
 
 type ViewMode = 'camera' | 'manual'
@@ -15,6 +15,11 @@ export default function Home() {
   const [showCalibration, setShowCalibration] = useState(false)
   const calibration = useGameStore(s => s.calibration)
   const resetHand = useGameStore(s => s.resetHand)
+
+  // Flush any sessions saved during previous page unload into IndexedDB
+  useEffect(() => {
+    flushPendingSessions()
+  }, [])
 
   const handleCameraMode = () => {
     if (!calibration) {

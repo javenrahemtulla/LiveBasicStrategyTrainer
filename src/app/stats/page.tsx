@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { getSessions, getLifetimeStats, SessionRecord } from '@/lib/historyStore'
+import { flushPendingSessions } from '@/lib/sessionStore'
 import Link from 'next/link'
 
 export default function StatsPage() {
@@ -10,6 +11,8 @@ export default function StatsPage() {
 
   useEffect(() => {
     async function load() {
+      // Flush any pending sessions before reading history
+      await flushPendingSessions()
       const [s, l] = await Promise.all([getSessions(20), getLifetimeStats()])
       setSessions(s)
       setLifetime(l)
