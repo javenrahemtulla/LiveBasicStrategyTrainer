@@ -14,7 +14,6 @@ export default function Home() {
   const [mode, setMode] = useState<ViewMode>('manual')
   const [showCalibration, setShowCalibration] = useState(false)
   const calibration = useGameStore(s => s.calibration)
-  const resetSession = useGameStore(s => s.resetSession)
   const resetHand = useGameStore(s => s.resetHand)
 
   const handleCameraMode = () => {
