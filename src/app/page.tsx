@@ -24,14 +24,18 @@ export default function Home() {
   }
 
   return (
-    <main className="h-screen w-screen relative overflow-hidden">
+    <main className="h-[100dvh] w-screen relative overflow-hidden flex flex-col">
       {mode === 'camera' ? (
-        <>
+        <div className="flex-1 relative">
           <CameraFeed />
           <GameOverlay />
-        </>
+        </div>
       ) : (
-        <ManualInput />
+        <div className="flex-1 min-h-0">
+          <ManualInput
+            onSwitchToCamera={handleCameraMode}
+          />
+        </div>
       )}
 
       {/* Calibration overlay */}
@@ -39,38 +43,35 @@ export default function Home() {
         <CalibrationView onComplete={() => setShowCalibration(false)} />
       )}
 
-      {/* Bottom controls */}
-      <div className="absolute bottom-4 left-0 right-0 z-50 flex justify-center gap-3 px-4">
-        <button
-          onClick={() => mode === 'camera' ? setMode('manual') : handleCameraMode()}
-          className="bg-white/20 backdrop-blur px-3 py-2 rounded-lg text-sm"
-        >
-          {mode === 'camera' ? 'Manual' : 'Camera'}
-        </button>
-
-        {mode === 'camera' && (
+      {/* Bottom controls — only shown in camera mode */}
+      {mode === 'camera' && (
+        <div className="shrink-0 flex justify-center gap-3 px-4 py-3 bg-black/80 backdrop-blur">
+          <button
+            onClick={() => setMode('manual')}
+            className="bg-white/20 px-3 py-2 rounded-lg text-sm"
+          >
+            Manual
+          </button>
           <button
             onClick={() => setShowCalibration(true)}
-            className="bg-white/20 backdrop-blur px-3 py-2 rounded-lg text-sm"
+            className="bg-white/20 px-3 py-2 rounded-lg text-sm"
           >
             Calibrate
           </button>
-        )}
-
-        <button
-          onClick={resetHand}
-          className="bg-white/20 backdrop-blur px-3 py-2 rounded-lg text-sm"
-        >
-          Reset Hand
-        </button>
-
-        <Link
-          href="/stats"
-          className="bg-white/20 backdrop-blur px-3 py-2 rounded-lg text-sm"
-        >
-          Stats
-        </Link>
-      </div>
+          <button
+            onClick={resetHand}
+            className="bg-white/20 px-3 py-2 rounded-lg text-sm"
+          >
+            Reset Hand
+          </button>
+          <Link
+            href="/stats"
+            className="bg-white/20 px-3 py-2 rounded-lg text-sm"
+          >
+            Stats
+          </Link>
+        </div>
+      )}
     </main>
   )
 }
